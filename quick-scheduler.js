@@ -137,8 +137,15 @@ class SchedulerQuickDialog extends HTMLElement {
         }
         dialog::backdrop { background: rgba(0, 0, 0, 0.4); }
         [hidden] { display: none !important; }
-        h2 { margin: 0 0 16px; font-size: 20px; font-weight: 500;
+        header { display: flex; align-items: center; gap: 8px; margin: -6px -10px 16px 0; }
+        h2 { flex: 1; min-width: 0; margin: 0; font-size: 20px; font-weight: 500;
           overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        button#close { flex: none; width: 40px; height: 40px; border: none; border-radius: 50%;
+          padding: 0; cursor: pointer; background: transparent;
+          color: var(--secondary-text-color, #666);
+          display: flex; align-items: center; justify-content: center; }
+        button#close svg { width: 24px; height: 24px; fill: currentColor; }
+        button#close:active { background: var(--secondary-background-color, #f2f2f2); }
 
         .segmented { display: flex; gap: 6px; padding: 4px; border-radius: 14px;
           background: var(--secondary-background-color, #f2f2f2); }
@@ -216,7 +223,10 @@ class SchedulerQuickDialog extends HTMLElement {
         .upcoming button:disabled { opacity: 0.5; cursor: default; }
       </style>
       <dialog>
-        <h2></h2>
+        <header>
+          <h2></h2>
+          <button type="button" id="close" aria-label="Close">${icon(CLOSE)}</button>
+        </header>
 
         <div class="segmented" data-group="action">
           <button type="button" data-val="on"></button>
@@ -260,6 +270,25 @@ class SchedulerQuickDialog extends HTMLElement {
     this._dialog = this._$("dialog");
     this._dialog.addEventListener("close", () => this.remove());
     this._$("#cancel").addEventListener("click", () => this._dialog.close());
+    this._$("#close").addEventListener("click", () => this._dialog.close());
+    // Close on a tap on the backdrop. Clicks on the dialog's own padding
+    // also target <dialog>, so check the position too. Both press and
+    // release must be outside, so a drag that ends outside doesn't close.
+    const outside = (e) => {
+      const r = this._dialog.getBoundingClientRect();
+      return (
+        e.target === this._dialog &&
+        (e.clientX < r.left || e.clientX > r.right ||
+          e.clientY < r.top || e.clientY > r.bottom)
+      );
+    };
+    this._dialog.addEventListener("pointerdown", (e) => {
+      this._downOutside = outside(e);
+    });
+    this._dialog.addEventListener("click", (e) => {
+      if (this._downOutside && outside(e)) this._dialog.close();
+      this._downOutside = false;
+    });
     this._$("#save").addEventListener("click", () => this._save());
     this._$("#dateMode").addEventListener("click", () => {
       this._state.dateMode = !this._state.dateMode;
