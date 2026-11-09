@@ -39,6 +39,53 @@ const DEFAULT_ACTIONS = {
 const actionsFor = (entityId) =>
   DOMAIN_ACTIONS[entityId.split(".")[0]] || DEFAULT_ACTIONS;
 
+const asList = (v) => (Array.isArray(v) ? v : v ? [v] : []);
+const actionTargets = (action, entityId) =>
+  [...asList(action.entity_id), ...asList(action.service_data?.entity_id)].includes(
+    entityId
+  );
+const escapeHtml = (s) =>
+  String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+
+// Upcoming runs of scheduler-component schedules that act on `entityId`,
+// soonest first. Each entry is the schedule's next timeslot that targets
+// the entity.
+const upcomingFor = (schedules, entityId) => {
+  const labels = Object.values(actionsFor(entityId));
+  const labelFor = (service) =>
+    labels.find((a) => a.service === service)?.label ||
+    service.split(".").pop().replace(/_/g, " ");
+  const now = Date.now();
+  const items = [];
+  for (const sched of schedules || []) {
+    const slots = sched.timeslots || [];
+    let best;
+    slots.forEach((slot, i) => {
+      const action = (slot.actions || []).find((a) => actionTargets(a, entityId));
+      if (!action) return;
+      const ts = new Date(sched.timestamps?.[i]);
+      const when = ts > now ? ts : null;
+      // Disabled schedules have no upcoming run but are still listed.
+      if (!when && sched.enabled !== false) return;
+      if (!best || (when && (!best.when || when < best.when))) {
+        best = { when, service: action.service };
+      }
+    });
+    if (!best) continue;
+    items.push({
+      entityId: sched.entity_id,
+      label: labelFor(best.service),
+      when: best.when,
+      enabled: sched.enabled !== false,
+      repeats: sched.repeat_type !== "single",
+    });
+  }
+  // Enabled ones by time, disabled ones last.
+  return items.sort(
+    (a, b) => b.enabled - a.enabled || (a.when || 0) - (b.when || 0)
+  );
+};
+
 // Fall back to the card's own config when the action has no `entity`.
 const entityFromEvent = (ev) => {
   for (const el of ev.composedPath()) {
@@ -48,6 +95,8 @@ const entityFromEvent = (ev) => {
   return undefined;
 };
 
+const CLOSE =
+  "M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z";
 const MINUS = "M19,13H5V11H19V13Z";
 const PLUS = "M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z";
 const icon = (path) =>
@@ -142,6 +191,29 @@ class SchedulerQuickDialog extends HTMLElement {
           color: var(--text-primary-color, #fff); padding: 0 20px; }
         .footer button#dateMode { padding: 0 8px; margin-left: -8px; font-size: 14px; }
         .footer button:disabled { opacity: 0.5; cursor: default; }
+
+        .upcoming { margin: 20px -20px -20px; padding: 16px 20px 20px;
+          border-top: 1px solid var(--divider-color, #ddd); }
+        .upcoming ul { list-style: none; margin: 0; padding: 0; max-height: 168px;
+          overflow-y: auto; border-radius: 14px;
+          background: var(--secondary-background-color, #f2f2f2); }
+        .upcoming li { display: flex; align-items: center; gap: 8px; min-height: 48px;
+          padding: 0 4px 0 14px; font-size: 15px; }
+        .upcoming li + li { border-top: 1px solid var(--divider-color, #ddd); }
+        .upcoming .what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+          white-space: nowrap; }
+        .upcoming .what .hint { color: var(--secondary-text-color, #666); font-size: 13px;
+          margin-left: 6px; }
+        .upcoming li.off .what { color: var(--secondary-text-color, #666); }
+        .upcoming button { flex: none; border: none; cursor: pointer; font: inherit; }
+        .upcoming button.delete { width: 44px; height: 44px; border-radius: 14px; padding: 0;
+          background: transparent; color: var(--secondary-text-color, #666);
+          display: flex; align-items: center; justify-content: center; }
+        .upcoming button.delete svg { width: 20px; height: 20px; fill: currentColor; }
+        .upcoming button.confirm { min-height: 32px; padding: 0 12px; margin-right: 6px;
+          border-radius: 16px; font-size: 14px;
+          background: var(--error-color, #db4437); color: #fff; }
+        .upcoming button:disabled { opacity: 0.5; cursor: default; }
       </style>
       <dialog>
         <h2></h2>
@@ -178,6 +250,11 @@ class SchedulerQuickDialog extends HTMLElement {
           <button type="button" id="cancel">Cancel</button>
           <button type="button" id="save" class="primary">Schedule</button>
         </div>
+
+        <div class="upcoming" hidden>
+          <div class="label"><span>Upcoming</span></div>
+          <ul></ul>
+        </div>
       </dialog>`;
 
     this._dialog = this._$("dialog");
@@ -192,6 +269,13 @@ class SchedulerQuickDialog extends HTMLElement {
       this._$(id).addEventListener("input", () => this._update());
     }
     this.shadowRoot.addEventListener("click", (e) => {
+      const del = e.target.closest(".upcoming button");
+      if (del) {
+        if (del.classList.contains("confirm")) this._removeSchedule(del.dataset.id);
+        else this._renderUpcoming(del.dataset.id);
+        return;
+      }
+      if (this._confirming) this._renderUpcoming(); // tap elsewhere cancels
       const seg = e.target.closest(".segmented button");
       if (seg) {
         this._state[seg.parentElement.dataset.group] = seg.dataset.val;
@@ -236,6 +320,61 @@ class SchedulerQuickDialog extends HTMLElement {
     this._$("#endDate").value = toLocalInput(addMinutes(startDate, 60));
     this._update();
     this._dialog.showModal();
+    this._loadUpcoming();
+  }
+
+  // Fetch schedules from scheduler-component. If that fails (component
+  // missing, old version), the section just stays hidden.
+  async _loadUpcoming() {
+    try {
+      const schedules = await getHass().callWS({ type: "scheduler" });
+      this._upcoming = upcomingFor(schedules, this._entityId);
+    } catch (err) {
+      console.warn("quick-scheduler: could not list schedules", err);
+      this._upcoming = [];
+    }
+    this._renderUpcoming();
+  }
+
+  // `confirming` is the schedule entity whose delete button was tapped once.
+  _renderUpcoming(confirming) {
+    this._confirming = confirming;
+    const items = this._upcoming || [];
+    this._$(".upcoming").hidden = items.length === 0;
+    this._$(".upcoming ul").innerHTML = items
+      .map((it) => {
+        const id = escapeHtml(it.entityId);
+        const when = it.when ? this._describe(it.when) : "Disabled";
+        const hint = it.repeats ? '<span class="hint">Repeats</span>' : "";
+        const button =
+          it.entityId === confirming
+            ? `<button type="button" class="confirm" data-id="${id}">Remove</button>`
+            : `<button type="button" class="delete" data-id="${id}"
+                aria-label="Remove ${escapeHtml(it.label)} ${escapeHtml(when)}">${icon(CLOSE)}</button>`;
+        return `<li class="${it.enabled ? "" : "off"}">
+          <span class="what">${escapeHtml(it.label)} · ${escapeHtml(when)}${hint}</span>
+          ${button}
+        </li>`;
+      })
+      .join("");
+  }
+
+  async _removeSchedule(scheduleEntityId) {
+    const error = this._$(".error");
+    error.textContent = "";
+    for (const b of this.shadowRoot.querySelectorAll(".upcoming button")) {
+      b.disabled = true;
+    }
+    try {
+      await getHass().callService("scheduler", "remove", {
+        entity_id: scheduleEntityId,
+      });
+      this._upcoming = this._upcoming.filter((it) => it.entityId !== scheduleEntityId);
+      this._renderUpcoming();
+    } catch (err) {
+      error.textContent = `Failed to remove: ${err?.message || err}`;
+      this._renderUpcoming();
+    }
   }
 
   _step(picker, delta) {

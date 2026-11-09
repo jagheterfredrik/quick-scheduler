@@ -16,9 +16,9 @@ and remove themselves after they run.
 
 - Home Assistant 2026.11 or later (for the Marketplace install).
 - [scheduler-component](https://github.com/nielsfaber/scheduler-component),
-  providing the `scheduler.add` service.
+  providing the `scheduler.add` and `scheduler.remove` services.
 - [scheduler-card](https://github.com/nielsfaber/scheduler-card) is optional,
-  for viewing or removing schedules.
+  for editing schedules.
 
 ## Installation
 
@@ -98,6 +98,9 @@ Long-press the card or row to open the dialog:
   - **At** – a clock time; if earlier than the start, it means the next day.
 - **Pick date** – switch to date and time fields (any minute) to schedule
   further ahead. **Next 24 h** switches back.
+- **Upcoming** – schedules that act on this entity, soonest first, including
+  recurring ("Repeats") and disabled ones. Tap ✕ and then **Remove** to delete
+  one. The section is hidden when there are none.
 
 The resolved time is shown next to each label, e.g. "Tomorrow 06:30".
 
@@ -111,6 +114,11 @@ On save, the dialog calls `scheduler.add` for the start action, and again for
 the revert action if an end is set (scheduler-component only runs actions at a
 timeslot's start). Each schedule uses `repeat_type: single`, one timeslot, and
 `start_date` = `end_date` = that day.
+
+The upcoming list comes from scheduler-component's `scheduler` websocket
+command, filtered to schedules with an action whose `entity_id` is this entity.
+Removing one calls `scheduler.remove` with the schedule's `switch.schedule_*`
+entity.
 
 | Domain | Services |
 | --- | --- |

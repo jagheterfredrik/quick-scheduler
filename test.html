@@ -10,14 +10,36 @@
     <div id="card"></div>
     <pre id="log"></pre>
     <script>
-      // Fake hass that records service calls.
+      // Fake hass that records service calls and serves a few schedules in
+      // scheduler-component's websocket format.
       window.calls = [];
+      const inHours = (h) => new Date(Date.now() + h * 3600000).toISOString();
+      const slot = (service, entity_id) => ({
+        start: "00:00",
+        actions: [{ service, entity_id }],
+      });
+      window.schedules = [
+        { entity_id: "switch.schedule_a1", repeat_type: "single", enabled: true,
+          timeslots: [slot("lock.unlock", "lock.wallbox_lock")], timestamps: [inHours(26)] },
+        { entity_id: "switch.schedule_b2", repeat_type: "single", enabled: true,
+          timeslots: [slot("lock.lock", "lock.wallbox_lock")], timestamps: [inHours(2)] },
+        { entity_id: "switch.schedule_c3", repeat_type: "repeat", enabled: true,
+          timeslots: [slot("lock.lock", "lock.wallbox_lock")], timestamps: [inHours(5)] },
+        { entity_id: "switch.schedule_d4", repeat_type: "repeat", enabled: false,
+          timeslots: [slot("lock.unlock", "lock.wallbox_lock")], timestamps: [] },
+        { entity_id: "switch.schedule_e5", repeat_type: "single", enabled: true,
+          timeslots: [slot("light.turn_on", "light.kitchen")], timestamps: [inHours(1)] },
+      ];
       document.querySelector("home-assistant").hass = {
         states: {
           "lock.wallbox_lock": { attributes: { friendly_name: "Wallbox Lock" } },
         },
+        callWS: async (msg) => (msg.type === "scheduler" ? window.schedules : null),
         callService: async (domain, service, data) => {
           window.calls.push({ domain, service, data });
+          if (service === "remove") {
+            window.schedules = window.schedules.filter((s) => s.entity_id !== data.entity_id);
+          }
           document.getElementById("log").textContent = JSON.stringify(
             window.calls,
             null,
