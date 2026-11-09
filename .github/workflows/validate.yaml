@@ -1,0 +1,20 @@
+name: Validate
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  validate-marketplace:
+    name: Marketplace validation
+    runs-on: ubuntu-latest
+    steps:
+      # The Marketplace keeps HACS's validation action and catalog format.
+      - uses: hacs/action@main
+        with:
+          category: plugin

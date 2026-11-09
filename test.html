@@ -1,0 +1,45 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>quick-scheduler test</title>
+  </head>
+  <body>
+    <home-assistant></home-assistant>
+    <div id="card"></div>
+    <pre id="log"></pre>
+    <script>
+      // Fake hass that records service calls.
+      window.calls = [];
+      document.querySelector("home-assistant").hass = {
+        states: {
+          "lock.wallbox_lock": { attributes: { friendly_name: "Wallbox Lock" } },
+        },
+        callService: async (domain, service, data) => {
+          window.calls.push({ domain, service, data });
+          document.getElementById("log").textContent = JSON.stringify(
+            window.calls,
+            null,
+            2
+          );
+        },
+      };
+      // Card with a shadow root, like a real Lovelace card.
+      const card = document.getElementById("card");
+      card._config = { entity: "lock.wallbox_lock" };
+      const inner = document.createElement("button");
+      inner.textContent = "Long-press me";
+      card.attachShadow({ mode: "open" }).appendChild(inner);
+      inner.addEventListener("click", () =>
+        inner.dispatchEvent(
+          new CustomEvent("ll-custom", {
+            detail: { action: "fire-dom-event", quick_scheduler: true },
+            bubbles: true,
+            composed: true,
+          })
+        )
+      );
+    </script>
+    <script type="module" src="./quick-scheduler.js"></script>
+  </body>
